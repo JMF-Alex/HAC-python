@@ -34,6 +34,7 @@ class Keycap(tk.Frame):
 class StatusPill(tk.Frame):
     KINDS = {
         "running": ("Running", theme.ACCENT, theme.RUNNING_TEXT, theme.RUNNING_BG, theme.RUNNING_BORDER),
+        "waiting": ("Starting", theme.WARNING, theme.TEXT_SOFT, theme.SURFACE, theme.BORDER),
         "stopped": ("Stopped", theme.TEXT_MUTED, theme.TEXT_SOFT, theme.SURFACE, theme.BORDER),
         "error": ("Error", theme.WARNING, theme.ERROR_TEXT, theme.ERROR_BG, theme.ERROR_BORDER),
     }

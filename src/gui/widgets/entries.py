@@ -17,3 +17,10 @@ class FlatEntry(tk.Entry):
 
     def set_enabled(self, enabled: bool) -> None:
         self.configure(state="normal" if enabled else "disabled")
+
+    def set_text(self, text: str) -> None:
+        state = str(self.cget("state"))
+        self.configure(state="normal")
+        self.delete(0, "end")
+        self.insert(0, text)
+        self.configure(state=state)

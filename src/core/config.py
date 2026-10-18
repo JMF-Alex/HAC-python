@@ -6,10 +6,21 @@ import os
 from core.constants import (
     DEFAULT_HOTKEY,
     DEFAULT_INTERVAL,
+    DEFAULT_JITTER,
+    DEFAULT_LIMIT_VALUE,
+    DEFAULT_START_DELAY,
     DEFAULT_TARGET_KEY,
     KEY_CHOICES,
+    LIMIT_KINDS,
+    LIMIT_NEVER,
     MAX_INTERVAL,
+    MAX_JITTER,
+    MAX_LIMIT_VALUE,
+    MAX_START_DELAY,
     MIN_INTERVAL,
+    MIN_JITTER,
+    MIN_LIMIT_VALUE,
+    MIN_START_DELAY,
     MODE_CLICK,
     MODES,
 )
@@ -17,7 +28,7 @@ from core.paths import user_data_dir
 
 logger = logging.getLogger(__name__)
 
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 CONFIG_FILENAME = "config.json"
 LEGACY_CONFIG_PATH = os.path.join(os.path.expanduser("~"), "hac_config.json")
 
@@ -33,6 +44,10 @@ def default_profile() -> dict:
         "hotkey": DEFAULT_HOTKEY,
         "mode": MODE_CLICK,
         "target_key": DEFAULT_TARGET_KEY,
+        "jitter": DEFAULT_JITTER,
+        "limit_kind": LIMIT_NEVER,
+        "limit_value": DEFAULT_LIMIT_VALUE,
+        "start_delay": DEFAULT_START_DELAY,
     }
 
 
@@ -94,12 +109,27 @@ def _migrate(data: dict) -> dict:
     return data
 
 
+def _clamped_number(value, low: float, high: float):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return min(high, max(low, float(value)))
+
+
 def _sanitize_profile(data: dict) -> dict:
     cfg = default_profile()
 
-    interval = data.get("interval")
-    if isinstance(interval, (int, float)) and not isinstance(interval, bool) and math.isfinite(interval):
-        cfg["interval"] = min(MAX_INTERVAL, max(MIN_INTERVAL, float(interval)))
+    for key, low, high in (
+        ("interval", MIN_INTERVAL, MAX_INTERVAL),
+        ("jitter", MIN_JITTER, MAX_JITTER),
+        ("limit_value", MIN_LIMIT_VALUE, MAX_LIMIT_VALUE),
+        ("start_delay", MIN_START_DELAY, MAX_START_DELAY),
+    ):
+        number = _clamped_number(data.get(key), low, high)
+        if number is not None:
+            cfg[key] = number
+
+    if data.get("limit_kind") in LIMIT_KINDS:
+        cfg["limit_kind"] = data["limit_kind"]
 
     if data.get("mode") in MODES:
         cfg["mode"] = data["mode"]

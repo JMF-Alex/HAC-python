@@ -11,7 +11,22 @@ from core.config import (
     suggest_hotkey,
     unique_name,
 )
-from core.constants import DEFAULT_INTERVAL, MAX_INTERVAL, MIN_INTERVAL
+from core.constants import (
+    DEFAULT_INTERVAL,
+    DEFAULT_JITTER,
+    DEFAULT_LIMIT_VALUE,
+    DEFAULT_START_DELAY,
+    LIMIT_CLICKS,
+    LIMIT_NEVER,
+    MAX_INTERVAL,
+    MAX_JITTER,
+    MAX_LIMIT_VALUE,
+    MAX_START_DELAY,
+    MIN_INTERVAL,
+    MIN_JITTER,
+    MIN_LIMIT_VALUE,
+    MIN_START_DELAY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +82,13 @@ class ClickerController:
             self.start()
 
     def start(self):
-        interval, corrected = self._parse_interval()
-        if corrected:
-            self._show_interval(interval)
+        settings = self.collect_settings(fix=True)
         try:
-            self.clicker.start(interval, self.view.mode_var.get(), self.view.key_var.get())
+            self.clicker.start(
+                settings["interval"], settings["mode"], settings["target_key"],
+                jitter=settings["jitter"], limit_kind=settings["limit_kind"],
+                limit_value=settings["limit_value"], start_delay=settings["start_delay"],
+            )
         except Exception as exc:
             logger.exception("Could not start clicking")
             self._error = str(exc) or exc.__class__.__name__
@@ -150,6 +167,7 @@ class ClickerController:
             self._commit_view()
         self._active = name
         self._error = None
+        self.clicker.clear_result()
         self.view.show_profile(name, self._profiles[name])
         self._push_profiles()
         self._refresh_status()
@@ -257,25 +275,37 @@ class ClickerController:
         self._refresh_status()
 
 
-    def _parse_interval(self):
-        raw = self.view.interval_entry.get().strip().replace(",", ".")
+    def _read_number(self, entry, default, low, high, fix=False, whole=False) -> float:
+        raw = entry.get().strip().replace(",", ".")
         try:
             value = float(raw)
         except ValueError:
-            return DEFAULT_INTERVAL, True
-        clamped = min(MAX_INTERVAL, max(MIN_INTERVAL, value))
-        return clamped, clamped != value
+            value, corrected = default, True
+        else:
+            clamped = min(high, max(low, value))
+            if whole:
+                clamped = float(int(clamped + 0.5))
+            value, corrected = clamped, clamped != value
+        if corrected and fix:
+            self.view.show_number(entry, value)
+        return value
 
-    def _show_interval(self, interval):
-        entry = self.view.interval_entry
-        entry.delete(0, "end")
-        entry.insert(0, str(interval))
-
-    def collect_settings(self) -> dict:
+    def collect_settings(self, fix=False) -> dict:
+        view = self.view
+        limit_kind = view.limit_var.get()
         return {
-            "interval": self._parse_interval()[0],
-            "mode": self.view.mode_var.get(),
-            "target_key": self.view.key_var.get(),
+            "interval": self._read_number(view.interval_entry, DEFAULT_INTERVAL, MIN_INTERVAL, MAX_INTERVAL, fix),
+            "mode": view.mode_var.get(),
+            "target_key": view.key_var.get(),
+            "jitter": self._read_number(view.jitter_entry, DEFAULT_JITTER, MIN_JITTER, MAX_JITTER, fix),
+            "limit_kind": limit_kind,
+            "limit_value": self._read_number(
+                view.limit_entry, DEFAULT_LIMIT_VALUE, MIN_LIMIT_VALUE, MAX_LIMIT_VALUE,
+                fix and limit_kind != LIMIT_NEVER, whole=limit_kind == LIMIT_CLICKS,
+            ),
+            "start_delay": self._read_number(
+                view.delay_entry, DEFAULT_START_DELAY, MIN_START_DELAY, MAX_START_DELAY, fix,
+            ),
         }
 
     def _snapshot(self) -> dict:
@@ -300,18 +330,32 @@ class ClickerController:
         self._refresh_status()
         self._poll_id = self.root.after(self.STATUS_POLL_MS, self._poll)
 
+    def _done_message(self):
+        if not self.clicker.limit_reached:
+            return None
+        clicks = self.clicker.click_count
+        if clicks:
+            return f"Finished after {clicks:,} clicks"
+        return "Finished · time limit reached"
+
     def _refresh_status(self):
         running = self.clicker.is_clicking
+        waiting = running and self.clicker.is_waiting
         error = None if running else (self._error or self.clicker.last_error)
-        state = (running, error)
+        done = None if (running or error) else self._done_message()
+        state = (running, waiting, error, done)
         if state == self._shown_status:
             return
         self._shown_status = state
 
-        if running:
+        if waiting:
+            self.view.show_status("waiting")
+        elif running:
             self.view.show_status("running")
         elif error:
             self.view.show_status("error", error)
+        elif done:
+            self.view.show_status("done", done)
         else:
             self.view.show_status("stopped")
         self.view.set_inputs_enabled(not running)
