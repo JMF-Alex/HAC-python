@@ -6,9 +6,19 @@ import pytest
 from core import config
 from core.constants import (
     DEFAULT_INTERVAL,
+    DEFAULT_JITTER,
+    DEFAULT_LIMIT_VALUE,
+    DEFAULT_START_DELAY,
     DEFAULT_TARGET_KEY,
+    LIMIT_CLICKS,
+    LIMIT_NEVER,
+    LIMIT_TIME,
     MAX_INTERVAL,
+    MAX_JITTER,
+    MAX_LIMIT_VALUE,
+    MAX_START_DELAY,
     MIN_INTERVAL,
+    MIN_LIMIT_VALUE,
     MODE_CLICK,
     MODE_HOLD,
 )
@@ -40,8 +50,12 @@ def test_save_then_load_roundtrip():
         "version": config.CONFIG_VERSION,
         "active_profile": "Fast",
         "profiles": {
-            "Fast": {"interval": 0.05, "hotkey": "F7", "mode": MODE_HOLD, "target_key": "space"},
-            "Slow": {"interval": 2.0, "hotkey": "F8", "mode": MODE_CLICK, "target_key": "mouse_right"},
+            "Fast": {**config.default_profile(), "interval": 0.05, "hotkey": "F7", "mode": MODE_HOLD, "target_key": "space"},
+            "Slow": {
+                **config.default_profile(), "interval": 2.0, "hotkey": "F8", "mode": MODE_CLICK,
+                "target_key": "mouse_right", "jitter": 25.0, "limit_kind": LIMIT_CLICKS,
+                "limit_value": 500.0, "start_delay": 3.0,
+            },
         },
     }
     config.save_config(cfg)
@@ -70,7 +84,7 @@ def test_migrates_v1_legacy_file_into_a_default_profile():
     cfg = config.load_config()
     assert cfg["active_profile"] == config.DEFAULT_PROFILE_NAME
     assert cfg["profiles"][config.DEFAULT_PROFILE_NAME] == {
-        "interval": 0.5, "hotkey": "F7", "mode": "Hold", "target_key": "mouse_left",
+        **config.default_profile(), "interval": 0.5, "hotkey": "F7", "mode": "Hold", "target_key": "mouse_left",
     }
 
 
@@ -91,7 +105,7 @@ def test_migrates_v2_flat_config_into_a_default_profile():
     cfg = config.load_config()
     assert cfg["version"] == config.CONFIG_VERSION
     assert cfg["profiles"][config.DEFAULT_PROFILE_NAME] == {
-        "interval": 0.2, "hotkey": "F9", "mode": "Click", "target_key": "mouse_right",
+        **config.default_profile(), "interval": 0.2, "hotkey": "F9", "mode": "Click", "target_key": "mouse_right",
     }
 
 
@@ -194,3 +208,67 @@ def test_suggest_hotkey_skips_taken_keys():
 
 def test_suggest_hotkey_returns_empty_when_everything_is_taken():
     assert config.suggest_hotkey([f"F{n}" for n in range(6, 13)]) == ""
+
+
+def test_default_profile_has_no_variation_limit_or_delay():
+    profile = config.default_profile()
+    assert profile["jitter"] == DEFAULT_JITTER == 0
+    assert profile["limit_kind"] == LIMIT_NEVER
+    assert profile["limit_value"] == DEFAULT_LIMIT_VALUE
+    assert profile["start_delay"] == DEFAULT_START_DELAY == 0
+
+
+def test_v3_config_loads_with_defaults_for_the_new_fields():
+    write_config({
+        "version": 3,
+        "active_profile": "Main",
+        "profiles": {"Main": {"interval": 0.3, "hotkey": "F7", "mode": "Hold", "target_key": "space"}},
+    })
+    cfg = config.load_config()
+    assert cfg["version"] == config.CONFIG_VERSION == 4
+    assert cfg["profiles"]["Main"] == {
+        **config.default_profile(), "interval": 0.3, "hotkey": "F7", "mode": "Hold", "target_key": "space",
+    }
+
+
+@pytest.mark.parametrize("raw, expected", [
+    (25, 25.0),
+    (-10, 0.0),
+    (250, MAX_JITTER),
+    ("lots", DEFAULT_JITTER),
+    (True, DEFAULT_JITTER),
+    (float("nan"), DEFAULT_JITTER),
+])
+def test_jitter_is_clamped_to_a_percentage(raw, expected):
+    assert sanitized_profile({"jitter": raw})["jitter"] == expected
+
+
+@pytest.mark.parametrize("raw, expected", [
+    (3, 3.0),
+    (-1, 0.0),
+    (9999, MAX_START_DELAY),
+    (None, DEFAULT_START_DELAY),
+    (float("inf"), DEFAULT_START_DELAY),
+])
+def test_start_delay_is_clamped(raw, expected):
+    assert sanitized_profile({"start_delay": raw})["start_delay"] == expected
+
+
+@pytest.mark.parametrize("raw, expected", [
+    (500, 500.0),
+    (0, MIN_LIMIT_VALUE),
+    (10**9, MAX_LIMIT_VALUE),
+    ("many", DEFAULT_LIMIT_VALUE),
+])
+def test_limit_value_is_clamped(raw, expected):
+    assert sanitized_profile({"limit_value": raw})["limit_value"] == expected
+
+
+@pytest.mark.parametrize("kind", [LIMIT_NEVER, LIMIT_CLICKS, LIMIT_TIME])
+def test_known_limit_kinds_are_kept(kind):
+    assert sanitized_profile({"limit_kind": kind})["limit_kind"] == kind
+
+
+@pytest.mark.parametrize("kind", ["Forever", "clicks", "", None, 3])
+def test_unknown_limit_kinds_fall_back_to_never(kind):
+    assert sanitized_profile({"limit_kind": kind})["limit_kind"] == LIMIT_NEVER
