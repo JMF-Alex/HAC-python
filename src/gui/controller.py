@@ -1,18 +1,10 @@
 import logging
 import threading
+import tkinter as tk
 
-from core import hotkeys
-
-from core.config import (
-    CONFIG_VERSION,
-    copy_name,
-    default_profile,
-    default_settings,
-    name_error,
-    save_config,
-    suggest_hotkey,
-    unique_name,
-)
+from core.storage.config import CONFIG_VERSION, default_profile, default_settings, save_config
+from core.storage.profiles import copy_name, name_error, suggest_hotkey, unique_name
+from core.system import hotkeys
 from core.constants import (
     DEFAULT_INTERVAL,
     DEFAULT_JITTER,
@@ -31,24 +23,13 @@ from core.constants import (
     MIN_START_DELAY,
     MODE_HOLD,
 )
-from core.failsafe import corner_hit
+from core.engine.failsafe import corner_hit
+from gui.formatting import clicks_text, format_duration
 
 logger = logging.getLogger(__name__)
 
 
-def format_duration(seconds: float) -> str:
-    total = int(seconds)
-    if total < 60:
-        return f"{total} s"
-    minutes, secs = divmod(total, 60)
-    if minutes < 60:
-        return f"{minutes}:{secs:02d}"
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours}:{minutes:02d}:{secs:02d}"
-
-
-def clicks_text(count: int) -> str:
-    return f"{count:,} click" if count == 1 else f"{count:,} clicks"
+CANCEL_KEY = "esc"
 
 
 class ClickerController:
@@ -247,11 +228,14 @@ class ClickerController:
         self.view.show_profiles(self._profiles, self._active)
 
 
-    def _on_hotkey(self, hotkey):
+    def _call_soon(self, callback):
         try:
-            self.root.after(0, lambda: self._toggle_for_hotkey(hotkey))
-        except RuntimeError:
+            self.root.after(0, callback)
+        except (RuntimeError, tk.TclError):
             pass
+
+    def _on_hotkey(self, hotkey):
+        self._call_soon(lambda: self._toggle_for_hotkey(hotkey))
 
     def _toggle_for_hotkey(self, hotkey):
         if self._blocked():
@@ -296,19 +280,20 @@ class ClickerController:
 
         def on_key(event):
             if event.event_type != "down" or captured.is_set():
-                return
+                return False
             captured.set()
             hotkeys.unhook(on_key)
-            new_key = event.name.upper()
-            try:
-                self.root.after(0, lambda: self._apply_new_hotkey(new_key))
-            except RuntimeError:
-                pass
+            new_key = None if event.name == CANCEL_KEY else event.name.upper()
+            self._call_soon(lambda: self._apply_new_hotkey(new_key))
+            return True
 
         hotkeys.hook(on_key)
 
     def _apply_new_hotkey(self, new_key):
         self.hotkey_waiting = False
+        if new_key is None:
+            self.view.show_hotkey(self.current_hotkey)
+            return
         owner = self._profile_for_hotkey(new_key)
         previous = self.current_hotkey
         if owner is not None and owner != self._active:

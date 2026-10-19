@@ -1,67 +1,65 @@
 import logging
 import tkinter as tk
 
-from core import timer_resolution
-from core.clicker import Clicker
-from core.config import load_config
-from core.paths import resource_path
-from gui import theme, window_chrome
+from core.constants import APP_NAME, APP_VERSION
+from core.engine.clicker import Clicker
+from core.storage.config import load_config
+from core.storage.paths import resource_path
+from core.system import timer_resolution
+from gui import theme
 from gui.controller import ClickerController
-from gui.layout import LayoutManager
+from gui.utils import window_chrome
+from gui.views.main_window import MainWindow
 
 logger = logging.getLogger(__name__)
 
 
 class HACApp:
-    VERSION = "v0.8.1"
-    WIDTH, HEIGHT = 900, 560
+    WIDTH, HEIGHT = 960, 620
 
     def __init__(self):
+        window_chrome.enable_dpi_awareness()
         self.root = tk.Tk()
-        self.root.title("HAutoClicker")
-        self.root.geometry(f"{self.WIDTH}x{self.HEIGHT}")
-        self.root.resizable(False, False)
+        self.root.withdraw()
+        self.root.title(APP_NAME)
         self.root.configure(bg=theme.BG)
         self.root.report_callback_exception = self._log_tk_exception
-        theme.apply_ttk_styles(self.root)
+        theme.init(self.root)
         self.config = load_config()
         self._timer_resolution_on = timer_resolution.begin(1)
         self.clicker = Clicker()
-        self.controller = None
-        self.layout = None
-        self.init_app()
-
-    def init_app(self):
         self.controller = ClickerController(self.root, self.clicker, self.config)
-        self.layout = LayoutManager(self.root, self.controller, self.VERSION)
-        self.controller.bind_view(self.layout)
-
-        self.center_window()
-        window_chrome.enable_dark_title_bar(self.root)
+        self.view = MainWindow(self.root, self.controller, APP_VERSION)
+        self.controller.bind_view(self.view)
+        self._place_window()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    def center_window(self):
+    def _place_window(self):
         self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() // 2) - (self.WIDTH // 2)
-        y = (self.root.winfo_screenheight() // 2) - (self.HEIGHT // 2)
-        self.root.geometry(f"{self.WIDTH}x{self.HEIGHT}+{x}+{y}")
-
-    def on_close(self):
-        self.controller.shutdown()
-        if self._timer_resolution_on:
-            timer_resolution.end(1)
-            self._timer_resolution_on = False
-        self.root.destroy()
+        width = max(theme.px(self.WIDTH), self.root.winfo_reqwidth())
+        height = max(theme.px(self.HEIGHT), self.root.winfo_reqheight())
+        x = max(0, (self.root.winfo_screenwidth() - width) // 2)
+        y = max(0, (self.root.winfo_screenheight() - height) // 2)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self.root.resizable(False, False)
 
     def _set_icon(self):
         try:
             self.root.iconbitmap(resource_path("assets", "icon.ico"))
         except tk.TclError:
-            logo = getattr(self.layout, "logo", None)
-            if logo is not None:
-                self.root.iconphoto(True, logo)
+            if self.view.logo is not None:
+                self.root.iconphoto(True, self.view.logo)
             else:
                 logger.warning("Window icon not found or unsupported on this platform")
+
+    def on_close(self):
+        try:
+            self.controller.shutdown()
+        finally:
+            if self._timer_resolution_on:
+                timer_resolution.end(1)
+                self._timer_resolution_on = False
+            self.root.destroy()
 
     @staticmethod
     def _log_tk_exception(exc_type, exc, tb):
@@ -69,4 +67,6 @@ class HACApp:
 
     def run(self):
         self._set_icon()
+        self.root.deiconify()
+        window_chrome.enable_dark_title_bar(self.root)
         self.root.mainloop()

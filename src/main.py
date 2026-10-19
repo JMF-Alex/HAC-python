@@ -2,7 +2,7 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-from core.paths import user_data_dir
+from core.storage.paths import user_data_dir
 
 
 def setup_logging():

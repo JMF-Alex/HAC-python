@@ -1,4 +1,5 @@
 APP_NAME = "HAutoClicker"
+APP_VERSION = "v0.8.2"
 
 MODE_CLICK = "Click"
 MODE_HOLD = "Hold"
