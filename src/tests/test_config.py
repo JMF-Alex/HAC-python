@@ -57,6 +57,7 @@ def test_save_then_load_roundtrip():
                 "limit_value": 500.0, "start_delay": 3.0,
             },
         },
+        "settings": {"failsafe": "Top-left", "always_on_top": True, "sound": True},
     }
     config.save_config(cfg)
     assert config.load_config() == cfg
@@ -225,10 +226,11 @@ def test_v3_config_loads_with_defaults_for_the_new_fields():
         "profiles": {"Main": {"interval": 0.3, "hotkey": "F7", "mode": "Hold", "target_key": "space"}},
     })
     cfg = config.load_config()
-    assert cfg["version"] == config.CONFIG_VERSION == 4
+    assert cfg["version"] == config.CONFIG_VERSION
     assert cfg["profiles"]["Main"] == {
         **config.default_profile(), "interval": 0.3, "hotkey": "F7", "mode": "Hold", "target_key": "space",
     }
+    assert cfg["settings"] == config.default_settings()
 
 
 @pytest.mark.parametrize("raw, expected", [
@@ -272,3 +274,83 @@ def test_known_limit_kinds_are_kept(kind):
 @pytest.mark.parametrize("kind", ["Forever", "clicks", "", None, 3])
 def test_unknown_limit_kinds_fall_back_to_never(kind):
     assert sanitized_profile({"limit_kind": kind})["limit_kind"] == LIMIT_NEVER
+
+
+def test_default_settings_are_all_off():
+    assert config.default_settings() == {"failsafe": "Off", "always_on_top": False, "sound": False}
+
+
+def test_v4_config_without_settings_gets_the_defaults():
+    write_config({
+        "version": 4,
+        "active_profile": "Main",
+        "profiles": {"Main": {"hotkey": "F7"}},
+    })
+    cfg = config.load_config()
+    assert cfg["version"] == config.CONFIG_VERSION == 5
+    assert cfg["settings"] == config.default_settings()
+    assert cfg["profiles"]["Main"]["hotkey"] == "F7"
+
+
+def test_settings_survive_saving_and_loading():
+    cfg = config.load_config()
+    cfg["settings"] = {"failsafe": "Bottom-right", "always_on_top": True, "sound": True}
+    config.save_config(cfg)
+    assert config.load_config()["settings"] == {"failsafe": "Bottom-right", "always_on_top": True, "sound": True}
+
+
+@pytest.mark.parametrize("corner", ["Off", "Top-left", "Top-right", "Bottom-left", "Bottom-right"])
+def test_every_failsafe_choice_is_kept(corner):
+    assert config._sanitize_settings({"failsafe": corner})["failsafe"] == corner
+
+
+@pytest.mark.parametrize("corner", ["Middle", "top-left", "", None, 3, True])
+def test_unknown_failsafe_choices_fall_back_to_off(corner):
+    assert config._sanitize_settings({"failsafe": corner})["failsafe"] == "Off"
+
+
+@pytest.mark.parametrize("raw", ["yes", 1, 0, None, []])
+def test_toggles_must_be_real_booleans(raw):
+    settings = config._sanitize_settings({"always_on_top": raw, "sound": raw})
+    assert settings["always_on_top"] is False
+    assert settings["sound"] is False
+
+
+@pytest.mark.parametrize("raw", [None, [], "nope", 5])
+def test_settings_that_are_not_a_dict_give_the_defaults(raw):
+    assert config._sanitize_settings(raw) == config.default_settings()
+
+
+def test_settings_are_kept_apart_from_profile_data():
+    cfg = config._sanitize({"profiles": {"A": {}}, "settings": {"sound": True}})
+    assert cfg["settings"]["sound"] is True
+    assert "sound" not in cfg["profiles"]["A"]
+
+
+def test_copy_name_appends_copy():
+    assert config.copy_name("Gaming", ["Gaming"]) == "Gaming copy"
+
+
+def test_copy_name_numbers_further_copies():
+    taken = ["Gaming", "Gaming copy"]
+    assert config.copy_name("Gaming", taken) == "Gaming copy 2"
+    assert config.copy_name("Gaming", taken + ["Gaming copy 2"]) == "Gaming copy 3"
+
+
+def test_copy_name_is_case_insensitive_about_clashes():
+    assert config.copy_name("Gaming", ["Gaming", "GAMING COPY"]) == "Gaming copy 2"
+
+
+def test_copy_name_of_a_copy_keeps_growing_a_suffix():
+    assert config.copy_name("Gaming copy", ["Gaming copy"]) == "Gaming copy copy"
+
+
+@pytest.mark.parametrize("name", ["x" * config.MAX_PROFILE_NAME, "W" * config.MAX_PROFILE_NAME])
+def test_copy_name_never_exceeds_the_name_limit(name):
+    taken = [name]
+    for _ in range(12):
+        copy = config.copy_name(name, taken)
+        assert config.name_error(copy, taken) is None
+        assert len(copy) <= config.MAX_PROFILE_NAME
+        taken.append(copy)
+    assert len(set(taken)) == 13

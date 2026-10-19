@@ -111,7 +111,7 @@ class ProfileSidebar(tk.Frame):
     WIDTH = 260
 
     def __init__(self, parent, app_name: str, version: str, logo=None,
-                 on_select=None, on_add=None, on_rename=None, on_delete=None):
+                 on_select=None, on_add=None, on_rename=None, on_delete=None, on_duplicate=None):
         super().__init__(parent, bg=theme.SIDEBAR, width=self.WIDTH)
         self.pack_propagate(False)
         self._logo = logo
@@ -119,6 +119,7 @@ class ProfileSidebar(tk.Frame):
         self._on_add = on_add
         self._on_rename = on_rename
         self._on_delete = on_delete
+        self._on_duplicate = on_duplicate
         self._active = None
         self._items = {}
 
@@ -205,15 +206,24 @@ class ProfileSidebar(tk.Frame):
         self._divider().pack(in_=footer, fill="x")
         buttons = tk.Frame(footer, bg=theme.SIDEBAR)
         buttons.pack(fill="x", padx=14, pady=12)
-        buttons.grid_columnconfigure((0, 1), weight=1, uniform="footer")
-        self.rename_button = FlatButton(buttons, "Rename", command=self._handle_rename, variant="quiet", pady=6)
-        self.rename_button.grid(row=0, column=0, sticky="ew", padx=(0, 3))
-        self.delete_button = FlatButton(buttons, "Delete", command=self._handle_delete, variant="quiet_danger", pady=6)
-        self.delete_button.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+        buttons.grid_columnconfigure((0, 1, 2), weight=1)
+        self.rename_button = FlatButton(
+            buttons, "Rename", command=self._handle_rename, variant="quiet", padx=6, pady=6,
+        )
+        self.rename_button.grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        self.duplicate_button = FlatButton(
+            buttons, "Duplicate", command=self._handle_duplicate, variant="quiet", padx=6, pady=6,
+        )
+        self.duplicate_button.grid(row=0, column=1, sticky="ew", padx=2)
+        self.delete_button = FlatButton(
+            buttons, "Delete", command=self._handle_delete, variant="quiet_danger", padx=6, pady=6,
+        )
+        self.delete_button.grid(row=0, column=2, sticky="ew", padx=(2, 0))
 
     def _sync_footer(self):
         has_selection = self._active is not None
         self.rename_button.set_enabled(has_selection)
+        self.duplicate_button.set_enabled(has_selection)
         self.delete_button.set_enabled(has_selection)
 
 
@@ -228,6 +238,10 @@ class ProfileSidebar(tk.Frame):
     def _handle_rename(self):
         if self._on_rename is not None and self._active is not None:
             self._on_rename(self._active)
+
+    def _handle_duplicate(self):
+        if self._on_duplicate is not None and self._active is not None:
+            self._on_duplicate(self._active)
 
     def _handle_delete(self):
         if self._on_delete is not None and self._active is not None:

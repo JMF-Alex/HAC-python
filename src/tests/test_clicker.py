@@ -75,7 +75,6 @@ def make_clicker():
 
 @pytest.fixture
 def short_limits(monkeypatch):
-    """The smallest allowed limit is 1, which would make the time tests slow."""
     monkeypatch.setattr("core.clicker.MIN_LIMIT_VALUE", 0.05)
 
 
@@ -420,6 +419,60 @@ def test_never_limit_ignores_the_limit_value(make_clicker):
     assert not clicker.limit_reached
 
 
+def test_idle_clicker_reports_no_mode_no_elapsed_and_no_countdown(make_clicker):
+    clicker = make_clicker(lambda _key: FakeSimulator())
+    assert clicker.mode is None
+    assert clicker.elapsed == 0.0
+    assert clicker.delay_remaining == 0.0
+
+
+@pytest.mark.parametrize("mode", [MODE_CLICK, MODE_HOLD])
+def test_mode_is_reported_while_running(make_clicker, mode):
+    sim = FakeSimulator()
+    clicker = make_clicker(lambda _key: sim)
+    clicker.start(0.01, mode, "shift")
+    assert clicker.mode == mode
+    clicker.stop()
+    assert clicker.mode is None
+
+
+def test_elapsed_grows_while_running(make_clicker):
+    sim = FakeSimulator()
+    clicker = make_clicker(lambda _key: sim)
+    clicker.start(0.01, MODE_CLICK, "mouse_left")
+    assert wait_until(lambda: clicker.elapsed > 0.05)
+    first = clicker.elapsed
+    time.sleep(0.05)
+    assert clicker.elapsed > first
+
+
+def test_the_countdown_runs_down_and_elapsed_only_starts_after_it(make_clicker):
+    sim = FakeSimulator()
+    clicker = make_clicker(lambda _key: sim)
+    clicker.start(0.01, MODE_CLICK, "mouse_left", start_delay=0.3)
+
+    assert 0.0 < clicker.delay_remaining <= 0.3
+    assert clicker.elapsed == 0.0
+    time.sleep(0.1)
+    assert clicker.delay_remaining < 0.25
+
+    assert wait_until(lambda: not clicker.is_waiting)
+    assert clicker.delay_remaining == 0.0
+    assert wait_until(lambda: clicker.elapsed > 0.0)
+    assert clicker.elapsed < 0.3
+
+
+def test_stats_reset_once_the_run_is_over(make_clicker):
+    sim = FakeSimulator()
+    clicker = make_clicker(lambda _key: sim)
+    clicker.start(MIN_INTERVAL, MODE_CLICK, "mouse_left", limit_kind=LIMIT_CLICKS, limit_value=3)
+    assert wait_until(lambda: not clicker.is_clicking)
+
+    assert clicker.elapsed == 0.0
+    assert clicker.mode is None
+    assert clicker.click_count == 3
+
+
 def test_start_delay_postpones_the_first_click(make_clicker):
     sim = FakeSimulator()
     clicker = make_clicker(lambda _key: sim)
@@ -495,5 +548,5 @@ def test_start_delay_is_capped(make_clicker):
     clicker.start(1, MODE_CLICK, "mouse_left", start_delay=10**6)
 
     assert clicker.is_waiting
-    assert clicker._run.start_delay == MAX_START_DELAY
+    assert clicker._run.start_delay == MAX_START_DELAY  # clamped, not taken literally
     assert clicker.stop() is True

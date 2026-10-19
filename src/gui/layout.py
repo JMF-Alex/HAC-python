@@ -2,6 +2,7 @@ import re
 import tkinter as tk
 
 from core.constants import (
+    FAILSAFE_CHOICES,
     KEY_CHOICES,
     LIMIT_CLICKS,
     LIMIT_KINDS,
@@ -28,7 +29,10 @@ CARD_HEIGHT = 128
 
 PAGE_BASIC = "Basic"
 PAGE_ADVANCED = "Advanced"
-PAGES = (PAGE_BASIC, PAGE_ADVANCED)
+PAGE_SETTINGS = "Settings"
+PAGES = (PAGE_BASIC, PAGE_ADVANCED, PAGE_SETTINGS)
+
+ON, OFF = "On", "Off"
 
 _LIMIT_HINTS = {
     LIMIT_NEVER: "Runs until you stop it",
@@ -63,6 +67,8 @@ class LayoutManager:
         self._note_text = None
         self._save_reset_id = None
         self._inputs_enabled = True
+        self._loading_settings = False
+        self._hint_mode = None
         self._pages = {}
         self.setup_layout()
 
@@ -81,6 +87,7 @@ class LayoutManager:
             self.root, self.APP_NAME, self.version, logo=self.logo,
             on_select=self.controller.select_profile, on_add=self.controller.add_profile,
             on_rename=self.controller.rename_profile, on_delete=self.controller.delete_profile,
+            on_duplicate=self.controller.duplicate_profile,
         )
         self.sidebar.grid(row=0, column=0, sticky="ns")
         self.sidebar.set_profiles(self._summaries(self.controller.profiles), active=self.controller.active_name)
@@ -122,6 +129,7 @@ class LayoutManager:
         self._pages = {
             PAGE_BASIC: self._build_basic(host),
             PAGE_ADVANCED: self._build_advanced(host),
+            PAGE_SETTINGS: self._build_settings(host),
         }
         for page in self._pages.values():
             page.grid(row=0, column=0, sticky="nsew")
@@ -237,6 +245,32 @@ class LayoutManager:
         self._sync_limit()
         return grid
 
+    def _build_settings(self, parent):
+        grid = self._make_grid(parent)
+        defaults = self.controller.settings
+
+        failsafe_card = Card(grid, "Fail-safe")
+        self.failsafe_var = tk.StringVar(value=defaults["failsafe"])
+        SegmentedControl(failsafe_card.body, list(FAILSAFE_CHOICES), self.failsafe_var).pack(anchor="w")
+        failsafe_card.add_hint("Stops clicking as soon as the mouse reaches that corner of the screen")
+        self._place(failsafe_card, 0, 0, span=2)
+
+        topmost_card = Card(grid, "Always on top")
+        self.topmost_var = tk.StringVar(value=ON if defaults["always_on_top"] else OFF)
+        SegmentedControl(topmost_card.body, [OFF, ON], self.topmost_var).pack(fill="x")
+        topmost_card.add_hint("Keeps this window above the others")
+        self._place(topmost_card, 1, 0)
+
+        sound_card = Card(grid, "Sound")
+        self.sound_var = tk.StringVar(value=ON if defaults["sound"] else OFF)
+        SegmentedControl(sound_card.body, [OFF, ON], self.sound_var).pack(fill="x")
+        sound_card.add_hint("Beeps when clicking starts or stops")
+        self._place(sound_card, 1, 1)
+
+        for variable in (self.failsafe_var, self.topmost_var, self.sound_var):
+            variable.trace_add("write", lambda *_: self._on_settings_edited())
+        return grid
+
     def _build_action(self, parent):
         self.toggle_button = FlatButton(
             parent, "Start clicking", command=self.controller.toggle, variant="primary",
@@ -258,7 +292,7 @@ class LayoutManager:
         self.toggle_button.set_text(_BUTTON_TEXT.get(kind, "Start clicking"))
         self.toggle_button.set_variant("danger" if running else "primary")
         self._error_text = message if kind == "error" else None
-        self._note_text = message if kind == "done" else None
+        self._note_text = message if kind in ("done", "running", "waiting") else None
         self._render_hint()
 
     def show_hotkey(self, hotkey) -> None:
@@ -276,7 +310,6 @@ class LayoutManager:
         entry.set_text(format_number(value))
 
     def show_profile(self, name: str, settings: dict) -> None:
-        """Load a profile's settings into the form."""
         self.set_profile_title(name)
         self.show_number(self.interval_entry, settings["interval"])
         self.show_number(self.jitter_entry, settings["jitter"])
@@ -286,6 +319,40 @@ class LayoutManager:
         self.key_var.set(settings["target_key"])
         self.limit_var.set(settings["limit_kind"])
         self.show_hotkey(settings["hotkey"])
+
+    def show_settings(self, settings: dict) -> None:
+        self._loading_settings = True
+        try:
+            self.failsafe_var.set(settings["failsafe"])
+            self.topmost_var.set(ON if settings["always_on_top"] else OFF)
+            self.sound_var.set(ON if settings["sound"] else OFF)
+        finally:
+            self._loading_settings = False
+        self.set_always_on_top(settings["always_on_top"])
+
+    def read_settings(self) -> dict:
+        return {
+            "failsafe": self.failsafe_var.get(),
+            "always_on_top": self.topmost_var.get() == ON,
+            "sound": self.sound_var.get() == ON,
+        }
+
+    def _on_settings_edited(self) -> None:
+        if not self._loading_settings:
+            self.controller.settings_changed()
+
+    def set_always_on_top(self, enabled: bool) -> None:
+        try:
+            self.root.attributes("-topmost", bool(enabled))
+        except tk.TclError:
+            pass
+
+    def beep(self) -> None:
+        self.root.bell()
+
+    def pointer_position(self):
+        x, y = self.root.winfo_pointerxy()
+        return x, y, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
 
     def show_profiles(self, profiles: dict, active: str) -> None:
         summaries = self._summaries(profiles)
@@ -337,19 +404,24 @@ class LayoutManager:
 
 
     def _render_hint(self):
+        if self._error_text:
+            mode, text, color = "text", _clip(self._error_text), theme.WARNING
+        elif self._note_text:
+            mode, text, color = "text", _clip(self._note_text), theme.TEXT_MUTED
+        elif self._hotkey:
+            mode, text, color = "keyed", "from any window to start or stop", theme.TEXT_MUTED
+        else:
+            mode, text, color = "text", "No hotkey set. Use Change to pick one", theme.TEXT_MUTED
+        self.hint_label.configure(text=text, fg=color)
+        if mode == "text" and self._hint_mode == "text":
+            return 
+        self._hint_mode = mode
         for widget in (self._hint_prefix, self._hint_key, self.hint_label):
             widget.pack_forget()
-        if self._error_text:
-            self.hint_label.configure(text=_clip(self._error_text), fg=theme.WARNING)
-        elif self._note_text:
-            self.hint_label.configure(text=_clip(self._note_text), fg=theme.TEXT_MUTED)
-        elif self._hotkey:
+        if mode == "keyed":
             self._hint_key.set_text(self._hotkey)
             self._hint_prefix.pack(side="left")
             self._hint_key.pack(side="left", padx=6)
-            self.hint_label.configure(text="from any window to start or stop", fg=theme.TEXT_MUTED)
-        else:
-            self.hint_label.configure(text="No hotkey set. Use Change to pick one", fg=theme.TEXT_MUTED)
         self.hint_label.pack(side="left")
 
     def _on_save(self):

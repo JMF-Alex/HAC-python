@@ -50,6 +50,8 @@ class _Run:
     thread: threading.Thread = None
     phase: str = PHASE_WAITING
     pressed: bool = False
+    created_at: float = field(default_factory=time.monotonic)
+    started_at: float = 0.0
 
 
 class Clicker:
@@ -70,6 +72,25 @@ class Clicker:
     def is_waiting(self) -> bool:
         run = self._run
         return run is not None and run.phase == PHASE_WAITING
+
+    @property
+    def mode(self):
+        run = self._run
+        return run.mode if run is not None else None
+
+    @property
+    def elapsed(self) -> float:
+        run = self._run
+        if run is None or run.phase != PHASE_RUNNING:
+            return 0.0
+        return time.monotonic() - run.started_at
+
+    @property
+    def delay_remaining(self) -> float:
+        run = self._run
+        if run is None or run.phase != PHASE_WAITING:
+            return 0.0
+        return max(0.0, run.start_delay - (time.monotonic() - run.created_at))
 
     @property
     def last_error(self):
@@ -153,6 +174,7 @@ class Clicker:
             with self._lock:
                 if self._run is not run:
                     return
+                run.started_at = time.monotonic()
                 run.phase = PHASE_RUNNING
             reached = self._hold(run) if run.mode == MODE_HOLD else self._click_loop(run)
         except Exception as exc:

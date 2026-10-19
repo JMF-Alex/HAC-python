@@ -5,7 +5,9 @@ from core import hotkeys
 
 from core.config import (
     CONFIG_VERSION,
+    copy_name,
     default_profile,
+    default_settings,
     name_error,
     save_config,
     suggest_hotkey,
@@ -16,6 +18,7 @@ from core.constants import (
     DEFAULT_JITTER,
     DEFAULT_LIMIT_VALUE,
     DEFAULT_START_DELAY,
+    FAILSAFE_OFF,
     LIMIT_CLICKS,
     LIMIT_NEVER,
     MAX_INTERVAL,
@@ -26,13 +29,31 @@ from core.constants import (
     MIN_JITTER,
     MIN_LIMIT_VALUE,
     MIN_START_DELAY,
+    MODE_HOLD,
 )
+from core.failsafe import corner_hit
 
 logger = logging.getLogger(__name__)
 
 
+def format_duration(seconds: float) -> str:
+    total = int(seconds)
+    if total < 60:
+        return f"{total} s"
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}:{secs:02d}"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}"
+
+
+def clicks_text(count: int) -> str:
+    return f"{count:,} click" if count == 1 else f"{count:,} clicks"
+
+
 class ClickerController:
     STATUS_POLL_MS = 200
+    FAILSAFE_POLL_MS = 50
 
     def __init__(self, root, clicker, config):
         self.root = root
@@ -42,10 +63,15 @@ class ClickerController:
         self._profiles = {name: dict(s) for name, s in config["profiles"].items()}
         self._active = config["active_profile"]
         self._hotkey_handles = {}
+        self._settings = dict(config.get("settings") or default_settings())
         self._last_saved = self._snapshot()
         self._error = None
+        self._note = None
         self._shown_status = None
+        self._inputs_locked = None
+        self._was_active = False
         self._poll_id = None
+        self._failsafe_id = None
         self._dialog_open = False
 
 
@@ -62,6 +88,10 @@ class ClickerController:
         return {name: dict(s) for name, s in self._profiles.items()}
 
     @property
+    def settings(self) -> dict:
+        return dict(self._settings)
+
+    @property
     def current_hotkey(self) -> str:
         return self._profiles[self._active]["hotkey"]
 
@@ -71,8 +101,10 @@ class ClickerController:
             if settings["hotkey"] and not self._register_hotkey(settings["hotkey"]):
                 settings["hotkey"] = ""
         self.view.show_hotkey(self.current_hotkey)
+        self.view.show_settings(self._settings)
         self._refresh_status()
         self._poll_id = self.root.after(self.STATUS_POLL_MS, self._poll)
+        self._failsafe_id = self.root.after(self.FAILSAFE_POLL_MS, self._failsafe_poll)
 
 
     def toggle(self):
@@ -94,6 +126,7 @@ class ClickerController:
             self._error = str(exc) or exc.__class__.__name__
         else:
             self._error = None
+            self._note = None
             self.save_settings()
         self._refresh_status()
 
@@ -126,6 +159,20 @@ class ClickerController:
             settings["hotkey"] = ""
         self._profiles[name] = settings
         self._activate(name, commit=False)
+        self.save_settings(refresh=False)
+
+    def duplicate_profile(self, name):
+        if self._blocked() or name not in self._profiles:
+            return
+        self.clicker.stop()
+        self._commit_view()
+        settings = dict(self._profiles[name])
+        settings["hotkey"] = suggest_hotkey(self._taken_hotkeys())
+        if settings["hotkey"] and not self._register_hotkey(settings["hotkey"]):
+            settings["hotkey"] = ""
+        copy = copy_name(name, self._profiles)
+        self._profiles[copy] = settings
+        self._activate(copy, commit=False)
         self.save_settings(refresh=False)
 
     def rename_profile(self, name):
@@ -167,6 +214,7 @@ class ClickerController:
             self._commit_view()
         self._active = name
         self._error = None
+        self._note = None
         self.clicker.clear_result()
         self.view.show_profile(name, self._profiles[name])
         self._push_profiles()
@@ -313,7 +361,13 @@ class ClickerController:
             "version": CONFIG_VERSION,
             "active_profile": self._active,
             "profiles": {name: dict(s) for name, s in self._profiles.items()},
+            "settings": dict(self._settings),
         }
+
+    def settings_changed(self):
+        self._settings = self.view.read_settings()
+        self.view.set_always_on_top(self._settings["always_on_top"])
+        self.save_settings(refresh=False)
 
     def save_settings(self, force=False, refresh=True):
         self._commit_view()
@@ -331,40 +385,84 @@ class ClickerController:
         self._poll_id = self.root.after(self.STATUS_POLL_MS, self._poll)
 
     def _done_message(self):
+        if self._note:
+            return self._note
         if not self.clicker.limit_reached:
             return None
         clicks = self.clicker.click_count
         if clicks:
-            return f"Finished after {clicks:,} clicks"
+            return f"Finished after {clicks_text(clicks)}"
         return "Finished · time limit reached"
+
+    def _live_message(self):
+        clicker = self.clicker
+        if clicker.is_waiting:
+            return f"Starting in {clicker.delay_remaining:.1f} s"
+        elapsed = clicker.elapsed
+        if clicker.mode == MODE_HOLD:
+            return f"Holding for {format_duration(elapsed)}"
+        clicks = clicker.click_count
+        text = clicks_text(clicks)
+        if clicks > 1 and elapsed >= 1.0:
+            text += f" · {clicks / elapsed:.1f}/s"
+        return text
 
     def _refresh_status(self):
         running = self.clicker.is_clicking
         waiting = running and self.clicker.is_waiting
         error = None if running else (self._error or self.clicker.last_error)
         done = None if (running or error) else self._done_message()
-        state = (running, waiting, error, done)
+        live = self._live_message() if running else None
+        state = (running, waiting, error, done, live)
         if state == self._shown_status:
             return
         self._shown_status = state
 
         if waiting:
-            self.view.show_status("waiting")
+            self.view.show_status("waiting", live)
         elif running:
-            self.view.show_status("running")
+            self.view.show_status("running", live)
         elif error:
             self.view.show_status("error", error)
         elif done:
             self.view.show_status("done", done)
         else:
             self.view.show_status("stopped")
-        self.view.set_inputs_enabled(not running)
+        if running != self._inputs_locked:
+            self._inputs_locked = running
+            self.view.set_inputs_enabled(not running)
+
+        active = running and not waiting
+        if active != self._was_active:
+            self._was_active = active
+            if self._settings["sound"]:
+                self.view.beep()
+
+    def _failsafe_poll(self):
+        self._check_failsafe()
+        self._failsafe_id = self.root.after(self.FAILSAFE_POLL_MS, self._failsafe_poll)
+
+    def _check_failsafe(self):
+        corner = self._settings["failsafe"]
+        if corner == FAILSAFE_OFF or not self.clicker.is_clicking or self.clicker.is_waiting:
+            return
+        try:
+            x, y, width, height = self.view.pointer_position()
+        except Exception:
+            logger.debug("Could not read the pointer position", exc_info=True)
+            return
+        if corner_hit(corner, x, y, width, height):
+            self.clicker.stop()
+            self._note = f"Stopped · mouse reached the {corner.lower()} corner"
+            self._refresh_status()
 
 
     def shutdown(self):
-        if self._poll_id is not None:
-            self.root.after_cancel(self._poll_id)
-            self._poll_id = None
+        for attribute in ("_poll_id", "_failsafe_id"):
+            after_id = getattr(self, attribute)
+            if after_id is not None:
+                self.root.after_cancel(after_id)
+                setattr(self, attribute, None)
         self.clicker.stop()
         self.save_settings(refresh=False)
         for hotkey in list(self._hotkey_handles):

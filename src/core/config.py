@@ -10,6 +10,8 @@ from core.constants import (
     DEFAULT_LIMIT_VALUE,
     DEFAULT_START_DELAY,
     DEFAULT_TARGET_KEY,
+    FAILSAFE_CHOICES,
+    FAILSAFE_OFF,
     KEY_CHOICES,
     LIMIT_KINDS,
     LIMIT_NEVER,
@@ -28,7 +30,7 @@ from core.paths import user_data_dir
 
 logger = logging.getLogger(__name__)
 
-CONFIG_VERSION = 4
+CONFIG_VERSION = 5
 CONFIG_FILENAME = "config.json"
 LEGACY_CONFIG_PATH = os.path.join(os.path.expanduser("~"), "hac_config.json")
 
@@ -51,6 +53,10 @@ def default_profile() -> dict:
     }
 
 
+def default_settings() -> dict:
+    return {"failsafe": FAILSAFE_OFF, "always_on_top": False, "sound": False}
+
+
 def config_path() -> str:
     return os.path.join(user_data_dir(), CONFIG_FILENAME)
 
@@ -65,6 +71,15 @@ def name_error(name: str, existing, ignore=None):
     if name.lower() in taken:
         return "A profile with that name already exists"
     return None
+
+
+def copy_name(name: str, existing) -> str:
+    for number in range(1, 1000):
+        suffix = " copy" if number == 1 else f" copy {number}"
+        candidate = name.strip()[:MAX_PROFILE_NAME - len(suffix)].rstrip() + suffix
+        if name_error(candidate, existing) is None:
+            return candidate
+    return unique_name("Profile", existing)
 
 
 def unique_name(base: str, existing) -> str:
@@ -144,6 +159,18 @@ def _sanitize_profile(data: dict) -> dict:
     return cfg
 
 
+def _sanitize_settings(data) -> dict:
+    settings = default_settings()
+    if not isinstance(data, dict):
+        return settings
+    if data.get("failsafe") in FAILSAFE_CHOICES:
+        settings["failsafe"] = data["failsafe"]
+    for key in ("always_on_top", "sound"):
+        if isinstance(data.get(key), bool):
+            settings[key] = data[key]
+    return settings
+
+
 def _sanitize(data: dict) -> dict:
     profiles = {}
     seen_names, used_hotkeys = set(), set()
@@ -171,7 +198,12 @@ def _sanitize(data: dict) -> dict:
     active = data.get("active_profile")
     if active not in profiles:
         active = next(iter(profiles))
-    return {"version": CONFIG_VERSION, "active_profile": active, "profiles": profiles}
+    return {
+        "version": CONFIG_VERSION,
+        "active_profile": active,
+        "profiles": profiles,
+        "settings": _sanitize_settings(data.get("settings")),
+    }
 
 
 def load_config() -> dict:
