@@ -1,5 +1,7 @@
 # HAutoClicker (HAC)
 
+We are moving to Rust, the HAC's v1 will be release in this [repo](https://github.com/JMF-Alex/hac), and all the new releases will be there.
+
 A fast, lightweight autoclicker for Windows and Linux, built with Python and Tkinter. Pick a key or mouse button, set the interval, and start or stop from any window with a single hotkey.
 
 [![License](https://img.shields.io/github/license/JMF-Alex/HAC?style=flat-square)](LICENSE)

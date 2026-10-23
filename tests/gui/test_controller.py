@@ -808,8 +808,6 @@ def test_shutdown_cancels_both_polling_loops(hotkey_log):
     assert len(root.cancelled) == 2
 
 class ImmediateRoot(FakeRoot):
-    """Runs work handed over from the keyboard thread right away."""
-
     def after(self, ms, callback=None):
         if ms == 0 and callback is not None:
             callback()
@@ -876,7 +874,7 @@ def test_key_releases_are_not_captured(capture):
 def test_a_hotkey_owned_by_another_profile_is_refused(capture):
     controller, view, log = capture
     controller.hotkey_waiting = False
-    controller.duplicate_profile("Default")  # the copy gets F7 and becomes active
+    controller.duplicate_profile("Default")
     controller.change_hotkey()
 
     log["hooks"][-1](key_down("f6"))
@@ -904,7 +902,7 @@ def test_a_hotkey_that_fires_while_the_window_closes_is_ignored(setup):
             raise tk.TclError("application has been destroyed")
 
     controller.root = ClosedRoot()
-    controller._on_hotkey("F6")  # must not raise
+    controller._on_hotkey("F6")
 
 
 def test_the_hotkey_toggles_the_active_profile(setup):

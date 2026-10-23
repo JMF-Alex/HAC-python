@@ -548,5 +548,5 @@ def test_start_delay_is_capped(make_clicker):
     clicker.start(1, MODE_CLICK, "mouse_left", start_delay=10**6)
 
     assert clicker.is_waiting
-    assert clicker._run.start_delay == MAX_START_DELAY  # clamped, not taken literally
+    assert clicker._run.start_delay == MAX_START_DELAY
     assert clicker.stop() is True

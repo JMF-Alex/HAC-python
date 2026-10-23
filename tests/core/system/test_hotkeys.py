@@ -5,7 +5,6 @@ from core.system import hotkeys
 
 @pytest.fixture(autouse=True)
 def fake_backend(monkeypatch):
-    """Skip the real keyboard listener; events are fed straight into the dispatcher."""
     state = {"started": 0, "stopped": 0}
 
     def start():
@@ -142,7 +141,7 @@ def test_unhook_removes_a_hook():
     hotkeys.hook(seen.append)
 
     hotkeys.unhook(seen.append)
-    hotkeys.unhook(seen.append)  # a second unhook is harmless
+    hotkeys.unhook(seen.append)
     press("a")
 
     assert seen == []

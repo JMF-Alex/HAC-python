@@ -12,7 +12,6 @@ def solid(width, height, rgba):
 
 
 def make_ico(images):
-    """images: list of (width, height, bpp, payload) -> .ico bytes."""
     directory, blobs = b"", b""
     offset = 6 + 16 * len(images)
     for width, height, bpp, payload in images:
@@ -37,7 +36,7 @@ def test_decode_png_rejects_other_data():
 
 def test_decode_png_rejects_unsupported_bit_depths():
     data = bytearray(png(1, 1))
-    data[8 + 8 + 8] = 16  # IHDR bit depth
+    data[8 + 8 + 8] = 16
     with pytest.raises(IconError):
         icon.decode_png(bytes(data))
 
